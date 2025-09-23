@@ -293,7 +293,7 @@ def show_dashboard():
                     COUNT(*) as total_productos,
                     SUM(CASE WHEN exceso = 1 THEN 1 ELSE 0 END) as productos_exceso,
                     SUM(CASE WHEN faltante = 1 THEN 1 ELSE 0 END) as productos_faltante,
-                    AVG(CASE WHEN rotacion > 0 THEN rotacion ELSE NULL END) as rotacion_promedio,
+                    AVG(CASE WHEN rotacion > 0 AND rotacion <= 1000 THEN rotacion ELSE NULL END) as rotacion_promedio,  -- FIXED: Filter extreme values
                     AVG(CASE WHEN dio > 0 AND dio < 999 THEN dio ELSE NULL END) as dio_promedio,
                     MIN(fecha_inicio) as fecha_inicio,
                     MAX(fecha_fin) as fecha_fin
@@ -454,6 +454,7 @@ def show_dashboard():
             # Get filtered data
             products_data = session.execute(text(f"""
                 SELECT 
+                    cabys,  -- FIXED: Added missing cabys column
                     nombre_clean,
                     total_compras as total_qty_in,
                     total_ventas as total_qty_out,
