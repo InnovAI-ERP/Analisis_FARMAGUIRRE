@@ -740,11 +740,19 @@ def show_visualizations(df):
         # Coverage vs Stock scatter plot
         st.subheader("Cobertura vs Stock Final")
         
+        # Define custom colors for each state
+        color_map = {
+            '🟡 Exceso': '#FFD700',    # Gold/Yellow for Excess
+            '🔴 Faltante': '#FF4444',  # Red for Shortage
+            '🟢 Normal': '#00AA00'     # Green for Normal
+        }
+        
         fig = px.scatter(
             df, 
             x='coverage_days', 
             y='stock_final',
             color='Estado',
+            color_discrete_map=color_map,
             hover_data=['nombre_clean', 'abc_class', 'xyz_class'],
             title="Análisis de Cobertura vs Stock",
             labels={'coverage_days': 'Días de Cobertura', 'stock_final': 'Stock Final'}
