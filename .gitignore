@@ -63,8 +63,8 @@ logs/
 temp/
 tmp/
 
-# Streamlit
-.streamlit/
+# Streamlit (allow config)
+.streamlit/secrets.toml
 
 # Excel files (data)
 *.xlsx
