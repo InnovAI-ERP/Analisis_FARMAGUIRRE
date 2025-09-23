@@ -452,11 +452,10 @@ def show_dashboard():
             # Get filtered data
             products_data = session.execute(text(f"""
                 SELECT 
-                    cabys,
                     nombre_clean,
                     total_compras as total_qty_in,
                     total_ventas as total_qty_out,
-                    stock_promedio as stock_final,
+                    stock_final,  -- FIXED: Use actual stock_final instead of stock_promedio
                     rotacion,
                     dio,
                     cobertura_dias as coverage_days,
@@ -547,7 +546,7 @@ def prepare_analysis_data(df):
                     pk.nombre_clean as descripcion,
                     pk.total_compras,
                     pk.total_ventas,
-                    pk.stock_promedio as stock_final,
+                    pk.stock_final,  -- FIXED: Use actual stock_final instead of stock_promedio
                     pk.rotacion,
                     pk.dio,
                     pk.cobertura_dias,

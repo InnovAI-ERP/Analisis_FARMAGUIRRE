@@ -112,19 +112,29 @@ class KpiCalculator:
         total_qty_in = sum(m.get('qty_in', 0) or 0 for m in movements)
         total_qty_out = sum(m.get('qty_out', 0) or 0 for m in movements)
         
-        # Calculate stock series
-        stock_series = self.calculate_stock_series(movements)
+        # FIXED: Calculate stock final as simple difference (no initial inventory assumed)
+        # This matches the business logic: Stock Final = Total Compras - Total Ventas
+        stock_final_raw = total_qty_in - total_qty_out
         
-        # Calculate final stock and average inventory
-        if stock_series:
-            stock_final = max(0, stock_series[-1]['stock_level'])
-            avg_inventory = np.mean([max(0, s['stock_level']) for s in stock_series])
+        # For display purposes, show 0 if negative (can't have negative physical stock)
+        # But keep the raw value for internal calculations
+        stock_final_display = max(0, stock_final_raw)
+        
+        # FIXED: Calculate average inventory more accurately
+        # If we have movements, calculate based on daily progression
+        if movements:
+            # Calculate stock series to get daily progression
+            stock_series = self.calculate_stock_series(movements, initial_stock=0.0)
+            if stock_series:
+                # Average inventory is the mean of daily stock levels
+                daily_stocks = [s['stock_level'] for s in stock_series]
+                avg_inventory = np.mean(daily_stocks) if daily_stocks else stock_final_display / 2
+            else:
+                # Fallback: assume linear depletion
+                avg_inventory = stock_final_display / 2
         else:
-            # Fallback calculation if no stock series
-            total_in = sum(m.get('qty_in', 0) for m in movements)
-            total_out = sum(m.get('qty_out', 0) for m in movements)
-            stock_final = max(0, total_in - total_out)
-            avg_inventory = stock_final / 2  # Simple approximation
+            # No movements, use final stock
+            avg_inventory = stock_final_display / 2
         
         # FIXED: Calculate weighted average cost with consistent ordering
         costs_sorted = sorted(costs, key=lambda x: (x.get('cantidad', 0), x.get('precio_unit', 0)))
@@ -137,7 +147,8 @@ class KpiCalculator:
             'total_ventas': total_qty_out,
             'stock_promedio': avg_inventory,
             'costo_promedio': avg_cost,
-            'stock_final_calculado': stock_final
+            'stock_final_calculado': stock_final_display,  # FIXED: Use display value (0 if negative)
+            'stock_final_raw': stock_final_raw  # Keep raw value for debugging
         }
     
     def calculate_financial_metrics(self, basic_metrics: Dict, period_days: int) -> Dict:
@@ -445,10 +456,14 @@ def calculate_kpis_fixed(start_date: date, end_date: date, **kwargs) -> None:
                 metrics['clasificacion_abc'] = abc_classification.get(metrics['nombre_clean'], 'C')
                 metrics['clasificacion_xyz'] = xyz_classification.get(metrics['nombre_clean'], 'Z')
                 
+                # FIXED: Map stock_final_calculado to stock_final for database
+                if 'stock_final_calculado' in metrics:
+                    metrics['stock_final'] = metrics['stock_final_calculado']
+                
                 # Filter only valid ProductoKpis fields
                 valid_fields = {
                     'cabys', 'nombre_clean', 'total_compras', 'total_ventas', 
-                    'stock_promedio', 'costo_promedio', 'precio_promedio',
+                    'stock_promedio', 'stock_final', 'costo_promedio', 'precio_promedio',  # FIXED: Added stock_final
                     'rotacion', 'dio', 'rop', 'stock_seguridad', 'cobertura_dias',
                     'exceso', 'faltante', 'clasificacion_abc', 'clasificacion_xyz',
                     'fecha_inicio', 'fecha_fin'

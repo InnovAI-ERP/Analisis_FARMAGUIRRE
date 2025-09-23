@@ -259,6 +259,7 @@ class ProductoKpis(Base):
     total_compras = Column(Float, default=0.0)
     total_ventas = Column(Float, default=0.0)
     stock_promedio = Column(Float, default=0.0)
+    stock_final = Column(Float, default=0.0)  # FIXED: Added stock_final field
     costo_promedio = Column(Float, default=0.0)
     precio_promedio = Column(Float, default=0.0)
     
