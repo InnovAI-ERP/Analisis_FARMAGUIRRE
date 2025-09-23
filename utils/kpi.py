@@ -355,7 +355,8 @@ class KpiCalculator:
     
     def calculate_flags(self, metrics: Dict, excess_threshold: int = 45, shortage_threshold: int = 7) -> Dict:
         """
-        Calculate operational flags
+        Calculate operational flags with mutually exclusive logic
+        FIXED: Flags are now mutually exclusive - a product cannot be both excess and shortage
         
         Args:
             metrics: Product metrics dictionary
@@ -369,8 +370,17 @@ class KpiCalculator:
         stock_final = metrics.get('stock_final_calculado', 0)
         rop = metrics.get('rop', 0)
         
-        exceso = 1 if coverage_days > excess_threshold else 0
-        faltante = 1 if (stock_final < rop or coverage_days < shortage_threshold) else 0
+        # FIXED: Mutually exclusive logic with priority order
+        # Priority: Shortage > Excess > Normal
+        
+        # Check shortage conditions first (higher priority)
+        is_shortage = (stock_final < rop or coverage_days < shortage_threshold)
+        
+        # Check excess conditions only if not shortage
+        is_excess = (not is_shortage) and (coverage_days > excess_threshold)
+        
+        exceso = 1 if is_excess else 0
+        faltante = 1 if is_shortage else 0
         
         return {
             'exceso': exceso,  # Map to normalized field name

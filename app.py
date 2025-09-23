@@ -32,9 +32,11 @@ try:
     from etl.parse_compras import parse_compras_file
     from etl.parse_ventas import parse_ventas_file
     from etl.loaders import load_to_database, create_daily_aggregates
-    from utils.kpi import calculate_kpis, calculate_abc_xyz
-    # FIXED: Import deterministic versions
+    # FIXED: Use corrected deterministic versions by default
     from utils.kpi_fixed import calculate_kpis_fixed
+    from utils.kpi import calculate_abc_xyz
+    # Alias for compatibility
+    calculate_kpis = calculate_kpis_fixed
     from etl.hybrid_normalized_loader_fixed import create_daily_aggregates_normalized_fixed
     from utils.dates_numbers import validate_date_range, clean_product_name, calculate_fraction_factor
     from utils.export_clean_data import export_clean_data_to_excel
@@ -983,8 +985,8 @@ def generate_test_data():
             
             create_daily_aggregates(start_date, end_date)
             
-            from utils.kpi import calculate_kpis
-            calculate_kpis(start_date, end_date)
+            # FIXED: Use deterministic version with corrected flags
+            calculate_kpis_fixed(start_date, end_date)
             
             st.session_state.data_loaded = True
             st.success("✅ ¡Datos de prueba generados exitosamente!")
