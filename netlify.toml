@@ -1,0 +1,13 @@
+[build]
+  command = "echo 'Streamlit app ready for deployment'"
+  publish = "."
+
+[build.environment]
+  PYTHON_VERSION = "3.9"
+
+# Streamlit apps need to be deployed to platforms that support Python servers
+# This configuration creates a static deployment notice
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
