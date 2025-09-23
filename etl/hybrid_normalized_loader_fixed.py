@@ -1,5 +1,6 @@
 """
 Hybrid normalized loader that uses existing parsers but normalizes the data
+FIXED VERSION: Deterministic aggregations and consistent ordering
 """
 
 import logging
@@ -132,6 +133,7 @@ def parse_ventas_with_fallback(ventas_file):
 def normalize_and_load_compras(compras_data: Dict[str, List[Dict]]) -> None:
     """
     Normalize compras data and load into ComprasNormalized table
+    FIXED: Deterministic processing order
     """
     with DatabaseSession() as session:
         try:
@@ -139,95 +141,95 @@ def normalize_and_load_compras(compras_data: Dict[str, List[Dict]]) -> None:
             details = compras_data.get('details', [])
             logger.info(f"Normalizing {len(headers)} compras headers and {len(details)} details")
             
+            # FIXED: Sort headers by no_consecutivo for deterministic processing
+            headers_sorted = sorted(headers, key=lambda x: x.get('no_consecutivo', ''))
+            
             # Create a mapping of headers by no_consecutivo
             headers_map = {}
-            for header in headers:
+            for header in headers_sorted:
                 no_consecutivo = header.get('no_consecutivo', '')
                 if no_consecutivo:
                     headers_map[no_consecutivo] = header
             
-            # Process each detail and combine with header data
-            for i, detail_data in enumerate(details):
-                try:
-                    no_consecutivo = detail_data.get('no_consecutivo', '')
-                    header_data = headers_map.get(no_consecutivo, {})
+            # FIXED: Sort details for deterministic processing
+            details_sorted = sorted(details, key=lambda x: (
+                x.get('no_consecutivo', ''), 
+                x.get('nombre_clean', ''),
+                x.get('cantidad', 0)
+            ))
+            
+            # Process each detail with its corresponding header
+            for detail_data in details_sorted:
+                no_consecutivo = detail_data.get('no_consecutivo', '')
+                header_data = headers_map.get(no_consecutivo, {})
+                
+                def clean_numeric(value, max_value=1000000):
+                    """Clean numeric values to prevent extreme outliers"""
+                    if value is None:
+                        return 0.0
+                    try:
+                        num_val = float(value)
+                        if abs(num_val) > max_value:
+                            logger.warning(f"Extreme value detected and capped: {num_val} -> {max_value}")
+                            return max_value if num_val > 0 else -max_value
+                        return num_val
+                    except (ValueError, TypeError):
+                        return 0.0
+                
+                # Create normalized record with all fields
+                normalized_data = {
+                    # Product fields
+                    'cabys': detail_data.get('cabys', ''),
+                    'codigo': detail_data.get('codigo', ''),
+                    'variacion': detail_data.get('variacion', ''),
+                    'codigo_referencia': detail_data.get('codigo_referencia', ''),
+                    'nombre': detail_data.get('nombre', ''),
+                    'nombre_clean': detail_data.get('nombre_clean', ''),
+                    'codigo_color': detail_data.get('codigo_color', ''),
+                    'color': detail_data.get('color', ''),
+                    'cantidad': clean_numeric(detail_data.get('cantidad', 0.0)),
+                    'regalia': clean_numeric(detail_data.get('regalia', 0.0)),
+                    'aplica_impuesto': detail_data.get('aplica_impuesto', ''),
+                    'costo': clean_numeric(detail_data.get('costo', 0.0)),
+                    'descuento': clean_numeric(detail_data.get('descuento', 0.0)),
+                    'utilidad': clean_numeric(detail_data.get('utilidad', 0.0)),
+                    'precio': clean_numeric(detail_data.get('precio', 0.0)),
+                    'precio_unit': clean_numeric(detail_data.get('precio_unit', detail_data.get('costo', 0.0))),
+                    'total': clean_numeric(detail_data.get('total', 0.0)),
                     
-                    # Validate and clean numeric values (prevent extreme values)
-                    def clean_numeric(value, max_value=1000000):
-                        """Clean numeric values to prevent extreme outliers"""
-                        if value is None:
-                            return 0.0
-                        try:
-                            num_val = float(value)
-                            if abs(num_val) > max_value:
-                                logger.warning(f"Extreme value detected and capped: {num_val} -> {max_value}")
-                                return max_value if num_val > 0 else -max_value
-                            return num_val
-                        except (ValueError, TypeError):
-                            return 0.0
+                    # Invoice fields (from header)
+                    'fecha': header_data.get('fecha', date.today()),
+                    'no_consecutivo': no_consecutivo,
+                    'no_factura': header_data.get('no_factura', ''),
+                    'no_guia': header_data.get('no_guia', ''),
+                    'ced_juridica': header_data.get('ced_juridica', ''),
+                    'proveedor': header_data.get('proveedor', ''),
+                    'items': clean_numeric(header_data.get('items', 0)),
+                    'fecha_vencimiento': header_data.get('fecha_vencimiento'),
+                    'dias_plazo': clean_numeric(header_data.get('dias_plazo', 0)),
+                    'moneda': header_data.get('moneda', 'CRC'),
+                    'tipo_cambio': clean_numeric(header_data.get('tipo_cambio', 1.0)),
+                    'monto': clean_numeric(header_data.get('monto', 0.0)),
+                    'descuento_factura': clean_numeric(header_data.get('descuento_factura', 0.0)),
+                    'iva': clean_numeric(header_data.get('iva', 0.0)),
+                    'total_factura': clean_numeric(header_data.get('total_factura', 0.0)),
+                    'observaciones': '',
+                    'motivo': '',
                     
-                    # Create normalized record
-                    normalized_record = {
-                        # Product fields from detail
-                        'cabys': detail_data.get('cabys', ''),
-                        'codigo': detail_data.get('codigo', ''),
-                        'variacion': detail_data.get('variacion', ''),
-                        'codigo_referencia': detail_data.get('codigo_referencia', ''),
-                        'nombre': detail_data.get('nombre', ''),
-                        'nombre_clean': detail_data.get('nombre_clean', ''),
-                        'codigo_color': detail_data.get('codigo_color', ''),
-                        'color': detail_data.get('color', ''),
-                        'cantidad': clean_numeric(detail_data.get('cantidad', 0.0), 10000),
-                        'regalia': 0.0,
-                        'aplica_impuesto': '',
-                        'costo': clean_numeric(detail_data.get('costo', detail_data.get('precio_unit', 0.0)), 100000),
-                        'descuento': clean_numeric(detail_data.get('descuento', 0.0), 100),
-                        'utilidad': clean_numeric(detail_data.get('utilidad', 0.0), 1000),
-                        'precio': clean_numeric(detail_data.get('precio_unit', 0.0), 100000),
-                        'precio_unit': clean_numeric(detail_data.get('precio_unit', 0.0), 100000),
-                        'total': clean_numeric(detail_data.get('cantidad', 0.0) * detail_data.get('precio_unit', 0.0), 1000000),
-                        
-                        # Invoice fields from header (with fallbacks from detail)
-                        'fecha': detail_data.get('fecha_compra', header_data.get('fecha', date.today())),
-                        'no_consecutivo': no_consecutivo,
-                        'no_factura': detail_data.get('no_factura', header_data.get('no_factura', '')),
-                        'no_guia': detail_data.get('no_guia', header_data.get('no_guia', '')),
-                        'ced_juridica': detail_data.get('ced_juridica', header_data.get('ced_juridica', '')),
-                        'proveedor': detail_data.get('proveedor', header_data.get('proveedor', '')),
-                        'items': 0,
-                        'fecha_vencimiento': None,
-                        'dias_plazo': 0,
-                        'moneda': '',
-                        'tipo_cambio': 1.0,
-                        'monto': 0.0,
-                        'descuento_factura': 0.0,
-                        'iva': 0.0,
-                        'total_factura': 0.0,
-                        'observaciones': '',
-                        'motivo': '',
-                        
-                        # Normalization fields
-                        'es_fraccion': detail_data.get('es_fraccion', 0),
-                        'factor_fraccion': detail_data.get('factor_fraccion', 1.0),
-                        'qty_normalizada': detail_data.get('qty_normalizada', detail_data.get('cantidad', 0.0)),
-                        
-                        # Compatibility fields
-                        'fecha_compra': detail_data.get('fecha_compra', header_data.get('fecha', date.today()))
-                    }
+                    # Normalization fields
+                    'es_fraccion': detail_data.get('es_fraccion', 0),
+                    'factor_fraccion': detail_data.get('factor_fraccion', 1.0),
+                    'qty_normalizada': detail_data.get('qty_normalizada', detail_data.get('cantidad', 0.0)),
                     
-                    record = ComprasNormalized(**normalized_record)
-                    session.add(record)
-                    
-                    if i < 3:  # Log first few records for debugging
-                        logger.info(f"Compras normalized {i}: {normalized_record.get('nombre_clean', 'Unknown')} - Qty: {normalized_record.get('cantidad', 0)}")
-                        
-                except Exception as e:
-                    logger.error(f"Error normalizing compras record {i}: {e}")
-                    logger.error(f"Detail data: {detail_data}")
-                    continue
+                    # Compatibility fields
+                    'fecha_compra': detail_data.get('fecha_compra', header_data.get('fecha', date.today()))
+                }
+                
+                compra_record = ComprasNormalized(**normalized_data)
+                session.add(compra_record)
             
             session.commit()
-            logger.info(f"Loaded {len(details)} normalized compras records")
+            logger.info(f"Successfully normalized and loaded {len(details_sorted)} compras records")
             
         except Exception as e:
             session.rollback()
@@ -237,6 +239,7 @@ def normalize_and_load_compras(compras_data: Dict[str, List[Dict]]) -> None:
 def normalize_and_load_ventas(ventas_data: Dict[str, List[Dict]]) -> None:
     """
     Normalize ventas data and load into VentasNormalized table
+    FIXED: Deterministic processing order
     """
     with DatabaseSession() as session:
         try:
@@ -244,106 +247,106 @@ def normalize_and_load_ventas(ventas_data: Dict[str, List[Dict]]) -> None:
             details = ventas_data.get('details', [])
             logger.info(f"Normalizing {len(headers)} ventas headers and {len(details)} details")
             
+            # FIXED: Sort headers by no_factura_interna for deterministic processing
+            headers_sorted = sorted(headers, key=lambda x: x.get('no_factura_interna', ''))
+            
             # Create a mapping of headers by no_factura_interna
             headers_map = {}
-            for header in headers:
+            for header in headers_sorted:
                 no_factura = header.get('no_factura_interna', '')
                 if no_factura:
                     headers_map[no_factura] = header
             
-            # Process each detail and combine with header data
-            for i, detail_data in enumerate(details):
-                try:
-                    no_factura = detail_data.get('no_factura_interna', '')
-                    header_data = headers_map.get(no_factura, {})
+            # FIXED: Sort details for deterministic processing
+            details_sorted = sorted(details, key=lambda x: (
+                x.get('no_factura_interna', ''), 
+                x.get('nombre_clean', ''),
+                x.get('cantidad', 0)
+            ))
+            
+            # Process each detail with its corresponding header
+            for detail_data in details_sorted:
+                no_factura = detail_data.get('no_factura_interna', '')
+                header_data = headers_map.get(no_factura, {})
+                
+                def clean_numeric(value, max_value=1000000):
+                    """Clean numeric values to prevent extreme outliers"""
+                    if value is None:
+                        return 0.0
+                    try:
+                        num_val = float(value)
+                        if abs(num_val) > max_value:
+                            logger.warning(f"Extreme value detected and capped: {num_val} -> {max_value}")
+                            return max_value if num_val > 0 else -max_value
+                        return num_val
+                    except (ValueError, TypeError):
+                        return 0.0
+                
+                # Create normalized record with all fields
+                normalized_data = {
+                    # Product fields
+                    'codigo': detail_data.get('codigo', ''),
+                    'cabys': detail_data.get('cabys', ''),
+                    'descripcion': detail_data.get('descripcion', ''),
+                    'nombre_clean': detail_data.get('nombre_clean', ''),
+                    'color': detail_data.get('color', ''),
+                    'cantidad': clean_numeric(detail_data.get('cantidad', 0.0)),
+                    'descuento': clean_numeric(detail_data.get('descuento', 0.0)),
+                    'utilidad': clean_numeric(detail_data.get('utilidad', 0.0)),
+                    'costo': clean_numeric(detail_data.get('costo', 0.0)),
+                    'precio_unit': clean_numeric(detail_data.get('precio_unit', 0.0)),
+                    'total': clean_numeric(detail_data.get('total', 0.0)),
                     
-                    # Validate and clean numeric values (prevent extreme values)
-                    def clean_numeric(value, max_value=1000000):
-                        """Clean numeric values to prevent extreme outliers"""
-                        if value is None:
-                            return 0.0
-                        try:
-                            num_val = float(value)
-                            if abs(num_val) > max_value:
-                                logger.warning(f"Extreme value detected and capped: {num_val} -> {max_value}")
-                                return max_value if num_val > 0 else -max_value
-                            return num_val
-                        except (ValueError, TypeError):
-                            return 0.0
+                    # Invoice fields (from header)
+                    'no_factura_interna': no_factura,
+                    'no_orden': header_data.get('no_orden', ''),
+                    'no_orden_compra': header_data.get('no_orden_compra', ''),
+                    'tipo_gasto': header_data.get('tipo_gasto', ''),
+                    'no_factura_electronica': header_data.get('no_factura_electronica', ''),
+                    'tipo_documento': header_data.get('tipo_documento', ''),
+                    'codigo_actividad': header_data.get('codigo_actividad', ''),
+                    'facturado_por': header_data.get('facturado_por', ''),
+                    'hecho_por': header_data.get('hecho_por', ''),
+                    'codigo_cliente': header_data.get('codigo_cliente', ''),
+                    'cliente': header_data.get('cliente', ''),
+                    'cedula_fisica': header_data.get('cedula_fisica', ''),
+                    'a_terceros': header_data.get('a_terceros', ''),
+                    'tipo_venta': header_data.get('tipo_venta', ''),
+                    'tipo_moneda': header_data.get('tipo_moneda', 'CRC'),
+                    'tipo_cambio': clean_numeric(header_data.get('tipo_cambio', 1.0)),
+                    'estado': header_data.get('estado', ''),
+                    'fecha': header_data.get('fecha', date.today()),
+                    'subtotal': clean_numeric(header_data.get('subtotal', 0.0)),
+                    'impuestos': clean_numeric(header_data.get('impuestos', 0.0)),
+                    'impuesto_servicios': clean_numeric(header_data.get('impuesto_servicios', 0.0)),
+                    'impuestos_devueltos': clean_numeric(header_data.get('impuestos_devueltos', 0.0)),
+                    'exonerado': clean_numeric(header_data.get('exonerado', 0.0)),
+                    'total_factura': clean_numeric(header_data.get('total_factura', 0.0)),
+                    'total_exento': clean_numeric(header_data.get('total_exento', 0.0)),
+                    'total_gravado': clean_numeric(header_data.get('total_gravado', 0.0)),
+                    'no_referencia_tarjeta': '',
+                    'monto_tarjeta': 0.0,
+                    'monto_efectivo': 0.0,
+                    'no_referencia_transaccion': '',
+                    'monto_transaccion': 0.0,
+                    'no_referencia': '',
+                    'monto_en': 0.0,
                     
-                    # Create normalized record
-                    normalized_record = {
-                        # Product fields from detail
-                        'codigo': detail_data.get('codigo', ''),
-                        'cabys': detail_data.get('cabys', ''),
-                        'descripcion': detail_data.get('descripcion', detail_data.get('nombre', '')),
-                        'nombre_clean': detail_data.get('nombre_clean', ''),
-                        'color': detail_data.get('color', ''),
-                        'cantidad': clean_numeric(detail_data.get('cantidad', 0.0), 10000),
-                        'descuento': clean_numeric(detail_data.get('descuento', 0.0), 100),
-                        'utilidad': clean_numeric(detail_data.get('utilidad', 0.0), 1000),
-                        'costo': clean_numeric(detail_data.get('costo', 0.0), 100000),
-                        'precio_unit': clean_numeric(detail_data.get('precio_unit', 0.0), 100000),
-                        'total': clean_numeric(detail_data.get('total', 0.0), 1000000),
-                        
-                        # Invoice fields from header (with fallbacks from detail)
-                        'no_factura_interna': no_factura,
-                        'no_orden': '',
-                        'no_orden_compra': '',
-                        'tipo_gasto': '',
-                        'no_factura_electronica': '',
-                        'tipo_documento': detail_data.get('tipo_documento', header_data.get('tipo_documento', '')),
-                        'codigo_actividad': '',
-                        'facturado_por': '',
-                        'hecho_por': '',
-                        'codigo_cliente': '',
-                        'cliente': detail_data.get('cliente', header_data.get('cliente', '')),
-                        'cedula_fisica': detail_data.get('cedula', header_data.get('cedula', '')),
-                        'a_terceros': '',
-                        'tipo_venta': '',
-                        'tipo_moneda': '',
-                        'tipo_cambio': 1.0,
-                        'estado': '',
-                        'fecha': detail_data.get('fecha_venta', header_data.get('fecha', date.today())),
-                        'subtotal': 0.0,
-                        'impuestos': 0.0,
-                        'impuesto_servicios': 0.0,
-                        'impuestos_devueltos': 0.0,
-                        'exonerado': 0.0,
-                        'total_factura': 0.0,
-                        'total_exento': 0.0,
-                        'total_gravado': 0.0,
-                        'no_referencia_tarjeta': '',
-                        'monto_tarjeta': 0.0,
-                        'monto_efectivo': 0.0,
-                        'no_referencia_transaccion': '',
-                        'monto_transaccion': 0.0,
-                        'no_referencia': '',
-                        'monto_en': 0.0,
-                        
-                        # Normalization fields
-                        'es_fraccion': detail_data.get('es_fraccion', 0),
-                        'factor_fraccion': detail_data.get('factor_fraccion', 1.0),
-                        'qty_normalizada': detail_data.get('qty_normalizada', detail_data.get('cantidad', 0.0)),
-                        
-                        # Compatibility fields
-                        'nombre': detail_data.get('descripcion', detail_data.get('nombre', '')),
-                        'fecha_venta': detail_data.get('fecha_venta', header_data.get('fecha', date.today()))
-                    }
+                    # Normalization fields
+                    'es_fraccion': detail_data.get('es_fraccion', 0),
+                    'factor_fraccion': detail_data.get('factor_fraccion', 1.0),
+                    'qty_normalizada': detail_data.get('qty_normalizada', detail_data.get('cantidad', 0.0)),
                     
-                    record = VentasNormalized(**normalized_record)
-                    session.add(record)
-                    
-                    if i < 3:  # Log first few records for debugging
-                        logger.info(f"Ventas normalized {i}: {normalized_record.get('nombre_clean', 'Unknown')} - Qty: {normalized_record.get('cantidad', 0)}")
-                        
-                except Exception as e:
-                    logger.error(f"Error normalizing ventas record {i}: {e}")
-                    logger.error(f"Detail data: {detail_data}")
-                    continue
+                    # Compatibility fields
+                    'nombre': detail_data.get('descripcion', ''),
+                    'fecha_venta': detail_data.get('fecha_venta', header_data.get('fecha', date.today()))
+                }
+                
+                venta_record = VentasNormalized(**normalized_data)
+                session.add(venta_record)
             
             session.commit()
-            logger.info(f"Loaded {len(details)} normalized ventas records")
+            logger.info(f"Successfully normalized and loaded {len(details_sorted)} ventas records")
             
         except Exception as e:
             session.rollback()
@@ -379,10 +382,10 @@ def clear_normalized_tables() -> None:
             logger.error(f"Error clearing normalized tables: {e}")
             raise e
 
-def create_daily_aggregates_normalized(start_date: date, end_date: date) -> None:
+def create_daily_aggregates_normalized_fixed(start_date: date, end_date: date) -> None:
     """
     Create daily aggregates from normalized tables
-    FIXED VERSION: Now uses deterministic ordering
+    FIXED VERSION: Deterministic aggregations with consistent ordering
     """
     with DatabaseSession() as session:
         try:
@@ -495,3 +498,12 @@ def create_daily_aggregates_normalized(start_date: date, end_date: date) -> None
             session.rollback()
             logger.error(f"Error creating daily aggregates from normalized tables: {e}")
             raise e
+
+# Keep original function for backward compatibility but use fixed version
+def create_daily_aggregates_normalized(start_date: date, end_date: date) -> None:
+    """
+    Create daily aggregates from normalized tables
+    This now calls the fixed version for deterministic results
+    """
+    logger.info("Using FIXED version of create_daily_aggregates_normalized for deterministic results")
+    create_daily_aggregates_normalized_fixed(start_date, end_date)

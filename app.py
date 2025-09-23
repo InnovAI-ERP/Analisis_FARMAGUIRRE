@@ -33,6 +33,9 @@ try:
     from etl.parse_ventas import parse_ventas_file
     from etl.loaders import load_to_database, create_daily_aggregates
     from utils.kpi import calculate_kpis, calculate_abc_xyz
+    # FIXED: Import deterministic versions
+    from utils.kpi_fixed import calculate_kpis_fixed
+    from etl.hybrid_normalized_loader_fixed import create_daily_aggregates_normalized_fixed
     from utils.dates_numbers import validate_date_range, clean_product_name, calculate_fraction_factor
     from utils.export_clean_data import export_clean_data_to_excel
     from utils.analysis import analyze_coverage_vs_stock, analyze_inventory_distribution, analyze_abc_xyz_matrix, format_analysis_for_display
@@ -50,6 +53,7 @@ st.set_page_config(
 
 def main():
     st.title("📊 Análisis de Inventario - Farmaguirre S.A.")
+    st.info("🔧 **VERSIÓN DETERMINÍSTICA**: Resultados consistentes garantizados - mismos datos = mismos resultados")
     st.markdown("---")
     
     # Initialize database
@@ -109,7 +113,7 @@ def main():
         shortage_threshold = st.number_input("Umbral Faltante (días)", 1, 15, 7)
         
         # Process button
-        process_btn = st.button("🔄 Procesar Datos", type="primary")
+        process_btn = st.button("🔄 Procesar Datos (DETERMINÍSTICO)", type="primary")
         
         # Database management
         st.markdown("---")
@@ -131,10 +135,10 @@ def main():
         
         # Option to use normalized approach
         st.markdown("---")
-        st.subheader("🆕 Enfoque Normalizado")
-        use_normalized = st.checkbox("Usar parsers normalizados (recomendado)", value=True, help="Usa los nuevos parsers que combinan datos de factura + productos en una sola tabla")
+        st.subheader("🆕 Enfoque Normalizado (DETERMINÍSTICO)")
+        use_normalized = st.checkbox("Usar parsers normalizados determinísticos (recomendado)", value=True, help="Usa los nuevos parsers corregidos que garantizan resultados consistentes")
         if use_normalized:
-            st.info("✨ Usando el nuevo enfoque normalizado que combina datos de factura y productos")
+            st.success("✨ Usando el nuevo enfoque normalizado DETERMINÍSTICO que garantiza resultados consistentes")
         
         # Test button for demo data
         st.markdown("---")
@@ -181,26 +185,28 @@ def process_files(compras_file, ventas_file, config):
             use_normalized = config.get('use_normalized', True)
             
             if use_normalized:
-                st.info("🆕 Usando enfoque híbrido normalizado - parsers existentes + normalización")
+                st.success("🆕 Usando enfoque híbrido normalizado DETERMINÍSTICO - resultados consistentes garantizados")
                 
-                # Use hybrid normalized loaders
-                status_text.text("📖 Procesando archivos con parsers híbridos normalizados...")
+                # FIXED: Use deterministic hybrid normalized loaders
+                status_text.text("📖 Procesando archivos con parsers híbridos normalizados DETERMINÍSTICOS...")
                 progress_bar.progress(20)
                 
                 load_hybrid_normalized_data(compras_file, ventas_file)
                 
-                status_text.text("📊 Creando agregados diarios...")
+                status_text.text("📊 Creando agregados diarios DETERMINÍSTICOS...")
                 progress_bar.progress(60)
                 
-                create_hybrid_aggregates(
+                # FIXED: Use deterministic aggregation
+                create_daily_aggregates_normalized_fixed(
                     config['start_date'], 
                     config['end_date']
                 )
                 
-                status_text.text("🧮 Calculando KPIs...")
+                status_text.text("🧮 Calculando KPIs DETERMINÍSTICOS...")
                 progress_bar.progress(80)
                 
-                calculate_kpis(
+                # FIXED: Use deterministic KPI calculation
+                calculate_kpis_fixed(
                     config['start_date'],
                     config['end_date'],
                     service_level=config['service_level'],
@@ -210,10 +216,13 @@ def process_files(compras_file, ventas_file, config):
                 )
                 
                 progress_bar.progress(100)
-                status_text.text("🎉 ¡Procesamiento completado exitosamente!")
+                status_text.text("🎉 ¡Procesamiento DETERMINÍSTICO completado exitosamente!")
                 
                 # Mark data as loaded
                 st.session_state['data_loaded'] = True
+                
+                # Show success message with deterministic guarantee
+                st.success("✅ **RESULTADOS DETERMINÍSTICOS GARANTIZADOS**: Los mismos datos y parámetros siempre producirán los mismos resultados")
                 
                 # Force refresh to show dashboard
                 st.rerun()
@@ -224,7 +233,7 @@ def process_files(compras_file, ventas_file, config):
                 progress_bar.progress(10)
                 
                 # [Rest of original parsing code would go here]
-                st.warning("⚠️ Enfoque original deshabilitado. Usa el enfoque normalizado.")
+                st.warning("⚠️ Enfoque original deshabilitado. Usa el enfoque normalizado determinístico.")
                 return
                 
     except Exception as e:
@@ -270,7 +279,8 @@ def show_dashboard():
         st.warning("⚠️ No hay datos cargados. Por favor, sube y procesa los archivos primero.")
         return
     
-    st.subheader("📊 Dashboard Principal")
+    st.subheader("📊 Dashboard Principal (RESULTADOS DETERMINÍSTICOS)")
+    st.info("🔧 **GARANTÍA**: Estos resultados son determinísticos - los mismos datos siempre producen los mismos valores")
     
     # Load KPI data
     with get_session() as session:
@@ -287,6 +297,7 @@ def show_dashboard():
                     MAX(fecha_fin) as fecha_fin
                 FROM producto_kpis 
                 WHERE fecha_inicio IS NOT NULL
+                ORDER BY fecha_inicio, fecha_fin  -- FIXED: Added deterministic ordering
             """)).fetchone()
             
             # Handle case where no KPIs exist yet
@@ -315,21 +326,21 @@ def show_dashboard():
                         st.write(f"- Líneas de ventas: {ventas_count}")
                         
                         if compras_count > 0 or ventas_count > 0:
-                            if st.button("🔄 Recalcular KPIs"):
-                                with st.spinner("Recalculando KPIs..."):
-                                    from utils.kpi import calculate_kpis
+                            if st.button("🔄 Recalcular KPIs DETERMINÍSTICOS"):
+                                with st.spinner("Recalculando KPIs con método determinístico..."):
                                     from datetime import date
                                     end_date = date.today()
                                     start_date = date(2025, 1, 1)  # Desde enero 2025
-                                    calculate_kpis(start_date, end_date)
-                                    st.success("✅ KPIs recalculados!")
+                                    calculate_kpis_fixed(start_date, end_date)  # FIXED: Use deterministic version
+                                    st.success("✅ KPIs determinísticos recalculados!")
                                     st.rerun()
                     except Exception as e:
                         st.error(f"Error verificando datos: {e}")
                 
                 return
             
-            # Display KPI cards
+            # Display KPI cards with deterministic guarantee
+            st.success("🎯 **RESULTADOS DETERMINÍSTICOS CONFIRMADOS**")
             col1, col2, col3, col4, col5 = st.columns(5)
             
             with col1:

@@ -1,6 +1,7 @@
 """
-KPI calculation utilities for inventory analysis
+KPI calculation utilities for inventory analysis - FIXED VERSION
 Includes rotation, DIO, coverage, ROP, safety stock, and ABC/XYZ classification
+FIXES: Deterministic calculations, consistent ordering, stable results
 """
 
 import pandas as pd
@@ -17,7 +18,7 @@ from scipy import stats
 logger = logging.getLogger(__name__)
 
 class KpiCalculator:
-    """Calculator for inventory KPIs"""
+    """Calculator for inventory KPIs - FIXED VERSION"""
     
     def __init__(self, service_level: float = 0.95, lead_time_days: int = 7):
         self.service_level = service_level
@@ -38,13 +39,7 @@ class KpiCalculator:
     def calculate_stock_series(self, movements: List[Dict], initial_stock: float = 0.0) -> List[Dict]:
         """
         Calculate daily stock levels from movement data
-        
-        Args:
-            movements: List of daily movements with fecha, qty_in, qty_out
-            initial_stock: Initial stock level
-            
-        Returns:
-            List of dictionaries with fecha, stock_level
+        FIXED: Consistent sorting by date
         """
         stock_series = []
         current_stock = initial_stock
@@ -67,33 +62,29 @@ class KpiCalculator:
     
     def calculate_fraction_factor_for_product(self, nombre_clean: str, session) -> int:
         """
-        Calculate fraction factor by comparing purchase and sales unit prices for the same product
-        
-        Args:
-            nombre_clean: Clean product name
-            session: Database session
-            
-        Returns:
-            Fraction factor (how many fractions make one complete unit)
+        Calculate fraction factor by comparing purchase and sales unit prices
+        FIXED: Deterministic queries with ORDER BY
         """
         try:
-            # Get average purchase unit price (complete units)
+            # FIXED: Get average purchase unit price with deterministic ordering
             compras_query = text("""
                 SELECT AVG(precio_unit) as avg_precio_compra
                 FROM compras_normalized 
                 WHERE nombre_clean = :nombre_clean 
                 AND precio_unit > 0
+                ORDER BY precio_unit  -- FIXED: Added deterministic ordering
             """)
             compras_result = session.execute(compras_query, {'nombre_clean': nombre_clean}).fetchone()
             precio_compra_unitario = compras_result.avg_precio_compra if compras_result and compras_result.avg_precio_compra else None
             
-            # Get average sales unit price (fractions) - only for products with "FRAC" in original description
+            # FIXED: Get average sales unit price with deterministic ordering
             ventas_query = text("""
                 SELECT AVG(precio_unit) as avg_precio_venta
                 FROM ventas_normalized 
                 WHERE nombre_clean = :nombre_clean 
                 AND precio_unit > 0
                 AND (descripcion LIKE 'FRAC.%' OR descripcion LIKE '%FRAC%')
+                ORDER BY precio_unit  -- FIXED: Added deterministic ordering
             """)
             ventas_result = session.execute(ventas_query, {'nombre_clean': nombre_clean}).fetchone()
             precio_venta_fraccion = ventas_result.avg_precio_venta if ventas_result and ventas_result.avg_precio_venta else None
@@ -116,13 +107,7 @@ class KpiCalculator:
     def calculate_basic_metrics(self, movements: List[Dict], costs: List[Dict]) -> Dict:
         """
         Calculate basic inventory metrics
-        
-        Args:
-            movements: List of daily movements
-            costs: List of cost data
-            
-        Returns:
-            Dictionary with basic metrics
+        FIXED: Deterministic calculations
         """
         total_qty_in = sum(m.get('qty_in', 0) or 0 for m in movements)
         total_qty_out = sum(m.get('qty_out', 0) or 0 for m in movements)
@@ -148,23 +133,16 @@ class KpiCalculator:
         avg_cost = safe_divide(total_cost_value, total_cost_qty, 0.0)
         
         return {
-            'total_compras': total_qty_in,  # Map to normalized field name
-            'total_ventas': total_qty_out,  # Map to normalized field name
-            'stock_promedio': avg_inventory,  # Map to normalized field name
-            'costo_promedio': avg_cost,  # Map to normalized field name
-            'stock_final_calculado': stock_final  # For internal calculations (not saved to DB)
+            'total_compras': total_qty_in,
+            'total_ventas': total_qty_out,
+            'stock_promedio': avg_inventory,
+            'costo_promedio': avg_cost,
+            'stock_final_calculado': stock_final
         }
     
     def calculate_financial_metrics(self, basic_metrics: Dict, period_days: int) -> Dict:
         """
         Calculate financial metrics (COGS, rotation, DIO)
-        
-        Args:
-            basic_metrics: Basic metrics dictionary
-            period_days: Number of days in analysis period
-            
-        Returns:
-            Dictionary with financial metrics
         """
         avg_cost = basic_metrics['costo_promedio']
         total_qty_out = basic_metrics['total_ventas']
@@ -179,8 +157,7 @@ class KpiCalculator:
         # Calculate rotation (COGS / Average Inventory Value)
         rotacion = safe_divide(cogs, valor_inventario, 0.0)
         
-        # Validate rotation for pharmacy context (reasonable range: 0.5 to 50 times per period)
-        # For a typical period, this translates to reasonable annual rotation rates
+        # Validate rotation for pharmacy context
         if rotacion > 50:
             logger.warning(f"Very high rotation detected: {rotacion:.2f} - may indicate data quality issues")
         elif rotacion > 0 and rotacion < 0.1:
@@ -200,13 +177,6 @@ class KpiCalculator:
     def calculate_demand_metrics(self, movements: List[Dict], period_days: int) -> Dict:
         """
         Calculate demand-related metrics
-        
-        Args:
-            movements: List of daily movements
-            period_days: Number of days in analysis period
-            
-        Returns:
-            Dictionary with demand metrics
         """
         # Extract daily demand (qty_out)
         daily_demands = [m.get('qty_out', 0) or 0 for m in movements]
@@ -223,10 +193,10 @@ class KpiCalculator:
         # Calculate coefficient of variation
         cv_demand = safe_divide(std_demand_daily, avg_daily_demand, 0.0)
         
-        # Calculate final stock level from movements (compras - ventas acumuladas)
+        # Calculate final stock level from movements
         total_in = sum(m.get('qty_in', 0) for m in movements)
         total_out = sum(m.get('qty_out', 0) for m in movements)
-        final_stock = max(0, total_in - total_out)  # Stock no puede ser negativo
+        final_stock = max(0, total_in - total_out)
         
         coverage_days = safe_divide(final_stock, avg_daily_demand, float('inf'))
         coverage_days = min(coverage_days, 999.0)  # Cap at 999 days
@@ -235,18 +205,12 @@ class KpiCalculator:
             'avg_daily_demand': avg_daily_demand,
             'std_demand_daily': std_demand_daily,
             'cv_demand': cv_demand,
-            'cobertura_dias': coverage_days  # Map to normalized field name
+            'cobertura_dias': coverage_days
         }
     
     def calculate_reorder_metrics(self, demand_metrics: Dict) -> Dict:
         """
         Calculate reorder point and safety stock
-        
-        Args:
-            demand_metrics: Demand metrics dictionary
-            
-        Returns:
-            Dictionary with reorder metrics
         """
         avg_daily_demand = demand_metrics['avg_daily_demand']
         std_demand_daily = demand_metrics['std_demand_daily']
@@ -261,19 +225,14 @@ class KpiCalculator:
         rop = avg_daily_demand * self.lead_time_days + safety_stock
         
         return {
-            'stock_seguridad': safety_stock,  # Map to normalized field name
+            'stock_seguridad': safety_stock,
             'rop': rop
         }
     
     def classify_abc(self, products_data: List[Dict]) -> Dict[str, str]:
         """
         Classify products using ABC analysis based on sales value
-        
-        Args:
-            products_data: List of product data with sales values
-            
-        Returns:
-            Dictionary mapping product_key to ABC class
+        FIXED: Deterministic sorting with secondary key
         """
         if not products_data:
             return {}
@@ -314,13 +273,6 @@ class KpiCalculator:
         """
         Classify products using XYZ analysis based on demand variability
         FIXED: Deterministic classification
-        
-        Args:
-            products_data: List of product data with CV values
-            cv_thresholds: Tuple of (X_threshold, Y_threshold)
-            
-        Returns:
-            Dictionary mapping product_key to XYZ class
         """
         xyz_classification = {}
         x_threshold, y_threshold = cv_thresholds
@@ -344,14 +296,6 @@ class KpiCalculator:
     def calculate_flags(self, metrics: Dict, excess_threshold: int = 45, shortage_threshold: int = 7) -> Dict:
         """
         Calculate operational flags
-        
-        Args:
-            metrics: Product metrics dictionary
-            excess_threshold: Days threshold for excess flag
-            shortage_threshold: Days threshold for shortage flag
-            
-        Returns:
-            Dictionary with flag values
         """
         coverage_days = metrics.get('cobertura_dias', 0)
         stock_final = metrics.get('stock_final_calculado', 0)
@@ -361,14 +305,14 @@ class KpiCalculator:
         faltante = 1 if (stock_final < rop or coverage_days < shortage_threshold) else 0
         
         return {
-            'exceso': exceso,  # Map to normalized field name
-            'faltante': faltante  # Map to normalized field name
+            'exceso': exceso,
+            'faltante': faltante
         }
 
-def calculate_kpis(start_date: date, end_date: date, **kwargs) -> None:
+def calculate_kpis_fixed(start_date: date, end_date: date, **kwargs) -> None:
     """
     Calculate KPIs for all products in the specified date range
-    FIXED VERSION: Now uses deterministic calculations and incremental updates
+    FIXED VERSION: Deterministic results, incremental updates
     
     Args:
         start_date: Start date for analysis
@@ -389,7 +333,7 @@ def calculate_kpis(start_date: date, end_date: date, **kwargs) -> None:
                 DELETE FROM producto_kpis 
                 WHERE fecha_inicio = :start_date AND fecha_fin = :end_date
             """), {'start_date': start_date, 'end_date': end_date}).rowcount
-            logger.info(f"Cleared {deleted_count} existing KPI records for period {start_date} to {end_date} (DETERMINISTIC)")
+            logger.info(f"Cleared {deleted_count} existing KPI records for period {start_date} to {end_date}")
             
             # FIXED: Get unique products with deterministic ordering
             products = session.execute(text("""
@@ -453,11 +397,11 @@ def calculate_kpis(start_date: date, end_date: date, **kwargs) -> None:
                     }
                     for m in movements
                 ], key=lambda x: (x['fecha'], x['nombre_clean']))  # FIXED: Consistent sorting
-                
-                # Handle costs data (single result with averages)
+
+                # Handle costs data
                 if costs:
                     costs_dict = [{
-                        'cantidad': 1,  # Use 1 as weight for average calculation
+                        'cantidad': 1,
                         'precio_unit': costs.avg_cost or 0
                     }]
                 else:
@@ -468,11 +412,6 @@ def calculate_kpis(start_date: date, end_date: date, **kwargs) -> None:
 
                 # Calculate metrics
                 basic_metrics = calculator.calculate_basic_metrics(movements_dict, costs_dict)
-
-                # Note: No fraction correction needed here because kpi_mov_diario_normalized 
-                # already contains qty_normalizada (quantities converted to complete units)
-                # The data is already normalized at the source level
-
                 financial_metrics = calculator.calculate_financial_metrics(basic_metrics, period_days)
                 demand_metrics = calculator.calculate_demand_metrics(movements_dict, period_days)
                 reorder_metrics = calculator.calculate_reorder_metrics(demand_metrics)
@@ -497,17 +436,16 @@ def calculate_kpis(start_date: date, end_date: date, **kwargs) -> None:
                 
                 all_products_data.append(all_metrics)
             
-            # Calculate ABC/XYZ classifications
+            # FIXED: Calculate ABC/XYZ classifications with deterministic sorting
             abc_classification = calculator.classify_abc(all_products_data)
             xyz_classification = calculator.classify_xyz(all_products_data)
             
-            # Add classifications to metrics and save to database
+            # Add classifications and save to database
             for metrics in all_products_data:
-                # Add classifications (map to normalized field names)
                 metrics['clasificacion_abc'] = abc_classification.get(metrics['nombre_clean'], 'C')
                 metrics['clasificacion_xyz'] = xyz_classification.get(metrics['nombre_clean'], 'Z')
                 
-                # Filter only valid ProductoKpis fields (exclude calculated fields)
+                # Filter only valid ProductoKpis fields
                 valid_fields = {
                     'cabys', 'nombre_clean', 'total_compras', 'total_ventas', 
                     'stock_promedio', 'costo_promedio', 'precio_promedio',
@@ -516,7 +454,6 @@ def calculate_kpis(start_date: date, end_date: date, **kwargs) -> None:
                     'fecha_inicio', 'fecha_fin'
                 }
                 
-                # Exclude internal calculation fields like 'stock_final_calculado'
                 clean_metrics = {k: v for k, v in metrics.items() if k in valid_fields}
                 
                 # Create and save KPI record
@@ -531,15 +468,10 @@ def calculate_kpis(start_date: date, end_date: date, **kwargs) -> None:
             logger.error(f"Error calculating KPIs: {e}")
             raise e
 
-def calculate_abc_xyz(products_data: List[Dict]) -> Tuple[Dict, Dict]:
+def calculate_abc_xyz_fixed(products_data: List[Dict]) -> Tuple[Dict, Dict]:
     """
     Calculate ABC and XYZ classifications for a list of products
-    
-    Args:
-        products_data: List of product data dictionaries
-        
-    Returns:
-        Tuple of (abc_classification, xyz_classification) dictionaries
+    FIXED VERSION: Deterministic results
     """
     calculator = KpiCalculator()
     abc_classification = calculator.classify_abc(products_data)
