@@ -560,10 +560,10 @@ def prepare_analysis_data(df):
                     pk.exceso,
                     pk.faltante,
                     pk.costo_promedio,
-                    (pk.stock_promedio * pk.costo_promedio) as valor_inventario
+                    (pk.stock_final * pk.costo_promedio) as valor_inventario
                 FROM producto_kpis pk
                 WHERE pk.fecha_inicio IS NOT NULL
-                ORDER BY (pk.stock_promedio * pk.costo_promedio) DESC
+                ORDER BY (pk.stock_final * pk.costo_promedio) DESC
             """)).fetchall()
             
             if complete_data:

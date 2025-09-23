@@ -154,16 +154,19 @@ class KpiCalculator:
     def calculate_financial_metrics(self, basic_metrics: Dict, period_days: int) -> Dict:
         """
         Calculate financial metrics (COGS, rotation, DIO)
+        FIXED: Use stock_final for valor_inventario instead of stock_promedio
         """
         avg_cost = basic_metrics['costo_promedio']
         total_qty_out = basic_metrics['total_ventas']
         inventario_promedio = basic_metrics['stock_promedio']
+        stock_final = basic_metrics['stock_final_calculado']  # FIXED: Use actual final stock
         
         # Calculate COGS
         cogs = avg_cost * total_qty_out
         
-        # Calculate inventory value
-        valor_inventario = avg_cost * inventario_promedio
+        # FIXED: Calculate inventory value using FINAL STOCK, not average stock
+        # This prevents "phantom inventory" where products with 0 final stock show positive value
+        valor_inventario = avg_cost * stock_final
         
         # Calculate rotation (COGS / Average Inventory Value)
         rotacion = safe_divide(cogs, valor_inventario, 0.0)

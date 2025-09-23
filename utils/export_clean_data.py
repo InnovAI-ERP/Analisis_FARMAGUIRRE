@@ -120,7 +120,7 @@ def export_clean_data_to_excel(output_file="datos_limpios_normalizados.xlsx"):
                             stock_final,
                             exceso,
                             faltante,
-                            (stock_promedio * costo_promedio) as valor_inventario
+                            (stock_final * costo_promedio) as valor_inventario
                         FROM producto_kpis
                         WHERE fecha_inicio IS NOT NULL
                         ORDER BY nombre_clean
