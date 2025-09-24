@@ -168,8 +168,11 @@ class KpiCalculator:
         # This prevents "phantom inventory" where products with 0 final stock show positive value
         valor_inventario = avg_cost * stock_final
         
-        # Calculate rotation (COGS / Average Inventory Value)
-        rotacion = safe_divide(cogs, valor_inventario, 0.0)
+        # FIXED: Calculate rotation using AVERAGE INVENTORY, not final stock
+        # Rotation measures how many times inventory "turns over" during the period
+        # Formula: Rotation = COGS / Average_Inventory_Value (not final inventory)
+        valor_inventario_promedio = avg_cost * inventario_promedio
+        rotacion = safe_divide(cogs, valor_inventario_promedio, 0.0)
         
         # Validate rotation for pharmacy context
         if rotacion > 50:
@@ -177,9 +180,9 @@ class KpiCalculator:
         elif rotacion > 0 and rotacion < 0.1:
             logger.info(f"Very low rotation detected: {rotacion:.2f} - possible slow-moving inventory")
         
-        # Calculate DIO (Days Inventory Outstanding)
+        # Calculate DIO (Days Inventory Outstanding) using average inventory
         daily_cogs = safe_divide(cogs, period_days, 0.0)
-        dio = safe_divide(valor_inventario, daily_cogs, 0.0) if daily_cogs > 0 else float('inf')
+        dio = safe_divide(valor_inventario_promedio, daily_cogs, 0.0) if daily_cogs > 0 else float('inf')
         
         return {
             'cogs': cogs,
