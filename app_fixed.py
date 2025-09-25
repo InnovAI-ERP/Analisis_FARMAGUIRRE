@@ -289,7 +289,7 @@ def show_dashboard():
                     COUNT(*) as total_productos,
                     SUM(CASE WHEN exceso = 1 THEN 1 ELSE 0 END) as productos_exceso,
                     SUM(CASE WHEN faltante = 1 THEN 1 ELSE 0 END) as productos_faltante,
-                    AVG(CASE WHEN rotacion > 0 THEN rotacion ELSE NULL END) as rotacion_promedio,
+                    AVG(CASE WHEN rotacion > 0 AND rotacion <= 1000 THEN rotacion ELSE NULL END) as rotacion_promedio,  -- FIXED: Filter extreme values
                     AVG(CASE WHEN dio > 0 AND dio < 999 THEN dio ELSE NULL END) as dio_promedio,
                     MIN(fecha_inicio) as fecha_inicio,
                     MAX(fecha_fin) as fecha_fin
@@ -358,8 +358,164 @@ def show_dashboard():
             with col5:
                 st.metric("DIO Promedio", f"{kpi_summary.dio_promedio:.1f} días")
             
-            # Show the rest of the dashboard (same as original but with deterministic guarantee)
-            # ... [rest of the dashboard code would be the same as original]
+            # Contextual information about rotation
+            if kpi_summary.rotacion_promedio and kpi_summary.fecha_inicio and kpi_summary.fecha_fin:
+                # Convert string dates to date objects if needed
+                try:
+                    if isinstance(kpi_summary.fecha_inicio, str):
+                        fecha_inicio = datetime.strptime(kpi_summary.fecha_inicio, '%Y-%m-%d').date()
+                    else:
+                        fecha_inicio = kpi_summary.fecha_inicio
+                    
+                    if isinstance(kpi_summary.fecha_fin, str):
+                        fecha_fin = datetime.strptime(kpi_summary.fecha_fin, '%Y-%m-%d').date()
+                    else:
+                        fecha_fin = kpi_summary.fecha_fin
+                    
+                    # Calculate period days from the actual KPI date range
+                    period_days = (fecha_fin - fecha_inicio).days + 1
+                    if period_days > 0:
+                        rotation_annual = kpi_summary.rotacion_promedio * (365 / period_days)
+                    else:
+                        rotation_annual = kpi_summary.rotacion_promedio  # Fallback for same-day analysis
+                except (ValueError, TypeError) as e:
+                    # Fallback if date parsing fails
+                    logger.warning(f"Error parsing dates for rotation analysis: {e}")
+                    rotation_annual = kpi_summary.rotacion_promedio
+                    period_days = "N/A"
+                    fecha_inicio = kpi_summary.fecha_inicio
+                    fecha_fin = kpi_summary.fecha_fin
+                
+                if rotation_annual < 2:
+                    rotation_status = "🔴 Muy Baja"
+                    rotation_advice = "Considerar estrategias para acelerar movimiento de inventario"
+                elif rotation_annual < 4:
+                    rotation_status = "🟡 Baja"
+                    rotation_advice = "Revisar productos de lento movimiento"
+                elif rotation_annual <= 12:
+                    rotation_status = "🟢 Saludable"
+                    rotation_advice = "Rotación típica para farmacia"
+                elif rotation_annual <= 24:
+                    rotation_status = "🟢 Muy Buena"
+                    rotation_advice = "Excelente liquidez de inventario"
+                else:
+                    rotation_status = "⚠️ Muy Alta"
+                    rotation_advice = "Verificar si hay riesgo de desabasto"
+                
+                st.info(f"""
+                **📊 Análisis de Rotación:** {rotation_status}
+                
+                - **Rotación anualizada estimada**: {rotation_annual:.1f} veces/año
+                - **Interpretación**: {rotation_advice}
+                - **Período analizado**: {period_days} días (desde {fecha_inicio} hasta {fecha_fin})
+                
+                *Nota: Solo se incluyen productos con rotación > 0 en el promedio*
+                """)
+            
+            st.markdown("---")
+            
+            # Product summary table
+            st.subheader("📋 Resumen por Producto")
+            
+            # Filters
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                search_term = st.text_input("🔍 Buscar producto", "")
+            
+            with col2:
+                abc_filter = st.selectbox("Filtro ABC", ["Todos", "A", "B", "C"])
+            
+            with col3:
+                xyz_filter = st.selectbox("Filtro XYZ", ["Todos", "X", "Y", "Z"])
+            
+            # Build query with filters (use fecha_inicio for latest calculation)
+            where_conditions = ["fecha_inicio IS NOT NULL"]
+            params = {}
+            
+            if search_term:
+                where_conditions.append("(UPPER(nombre_clean) LIKE UPPER(:search) OR UPPER(cabys) LIKE UPPER(:search))")
+                params['search'] = f"%{search_term}%"
+            
+            if abc_filter != "Todos":
+                where_conditions.append("clasificacion_abc = :abc_class")
+                params['abc_class'] = abc_filter
+            
+            if xyz_filter != "Todos":
+                where_conditions.append("clasificacion_xyz = :xyz_class")
+                params['xyz_class'] = xyz_filter
+            
+            where_clause = " AND ".join(where_conditions)
+            
+            # Get filtered data
+            products_data = session.execute(text(f"""
+                SELECT 
+                    cabys,  -- FIXED: Added missing cabys column
+                    nombre_clean,
+                    total_compras as total_qty_in,
+                    total_ventas as total_qty_out,
+                    stock_final,  -- FIXED: Use actual stock_final instead of stock_promedio
+                    rotacion,
+                    dio,
+                    cobertura_dias as coverage_days,
+                    rop,
+                    stock_seguridad as safety_stock,
+                    clasificacion_abc as abc_class,
+                    clasificacion_xyz as xyz_class,
+                    exceso,
+                    faltante
+                FROM producto_kpis
+                WHERE {where_clause}
+                ORDER BY total_ventas * costo_promedio DESC
+                LIMIT 100
+            """), params).fetchall()
+            
+            if products_data:
+                # Convert to DataFrame for display
+                df = pd.DataFrame([dict(row._mapping) for row in products_data])
+                
+                # Format columns
+                df['Compras-Ventas'] = df['total_qty_in'] - df['total_qty_out']
+                df['Estado'] = df.apply(lambda x: 
+                    "🔴 Faltante" if x['faltante'] else 
+                    "🟡 Exceso" if x['exceso'] else 
+                    "🟢 Normal", axis=1)
+                
+                # Select and rename columns for display
+                display_df = df[[
+                    'cabys', 'nombre_clean', 'total_qty_in', 'total_qty_out', 
+                    'Compras-Ventas', 'stock_final', 'rotacion', 'dio', 
+                    'coverage_days', 'abc_class', 'xyz_class', 'Estado'
+                ]].copy()
+                
+                display_df.columns = [
+                    'CABYS', 'Producto', 'Compras', 'Ventas', 'Diferencia',
+                    'Stock Final', 'Rotación', 'DIO', 'Cobertura (días)',
+                    'ABC', 'XYZ', 'Estado'
+                ]
+                
+                # Format numeric columns
+                numeric_cols = ['Compras', 'Ventas', 'Diferencia', 'Stock Final', 'Cobertura (días)']
+                for col in numeric_cols:
+                    display_df[col] = display_df[col].round(2)
+                
+                display_df['Rotación'] = display_df['Rotación'].round(2)
+                display_df['DIO'] = display_df['DIO'].round(1)
+                
+                st.dataframe(display_df, use_container_width=True, height=400)
+                
+                # Export button
+                if st.button("📥 Exportar a Excel"):
+                    export_to_excel(df)
+                    
+                # Visualizations
+                st.markdown("---")
+                st.subheader("📈 Visualizaciones")
+                
+                # Create visualizations with the corrected rotation chart
+                show_visualizations_fixed(df)
+            else:
+                st.info("No se encontraron productos con los filtros aplicados.")
             
         except Exception as e:
             st.error(f"Error cargando dashboard: {e}")
@@ -388,6 +544,180 @@ def export_clean_data():
             st.success("✅ Datos exportados exitosamente con ordenamiento determinístico!")
     except Exception as e:
         st.error(f"❌ Error exportando datos: {e}")
+
+def show_visualizations_fixed(df):
+    """Show dashboard visualizations with CORRECTED rotation distribution"""
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Coverage vs Stock scatter plot
+        st.subheader("Cobertura vs Stock Final")
+        
+        # Define custom colors for each state
+        color_map = {
+            '🟡 Exceso': '#FFD700',    # Gold/Yellow for Excess
+            '🔴 Faltante': '#FF4444',  # Red for Shortage
+            '🟢 Normal': '#00AA00'     # Green for Normal
+        }
+        
+        fig = px.scatter(
+            df, 
+            x='coverage_days', 
+            y='stock_final',
+            color='Estado',
+            color_discrete_map=color_map,
+            hover_data=['nombre_clean', 'abc_class', 'xyz_class'],
+            title="Análisis de Cobertura vs Stock",
+            labels={'coverage_days': 'Días de Cobertura', 'stock_final': 'Stock Final'}
+        )
+        
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Explicación del gráfico Cobertura vs Stock
+        st.info("""
+        **📊 ¿Qué muestra este gráfico?**
+        
+        Este gráfico relaciona los **días de cobertura** (eje X) con el **stock final** (eje Y) de cada producto:
+        
+        - **🟢 Puntos verdes (Normal)**: Productos con cobertura entre 30-90 días - inventario saludable
+        - **🟡 Puntos amarillos (Exceso)**: Productos con más de 90 días de cobertura - posible sobrestock
+        - **🔴 Puntos rojos (Faltante)**: Productos con menos de 30 días de cobertura - riesgo de desabasto
+        
+        **💡 Interpretación:**
+        - Puntos en la **esquina superior derecha** = Alto stock + Alta cobertura (revisar si es exceso)
+        - Puntos en la **esquina inferior izquierda** = Bajo stock + Baja cobertura (riesgo crítico)
+        - La **línea ideal** sería una distribución concentrada en la zona verde (30-90 días)
+        """)
+    
+    with col2:
+        # ABC/XYZ Matrix
+        st.subheader("Matriz ABC/XYZ")
+        
+        # Create matrix data
+        matrix_data = df.groupby(['abc_class', 'xyz_class']).size().reset_index(name='count')
+        
+        fig = px.scatter(
+            matrix_data,
+            x='xyz_class',
+            y='abc_class', 
+            size='count',
+            title="Distribución ABC/XYZ",
+            labels={'xyz_class': 'Clase XYZ', 'abc_class': 'Clase ABC'}
+        )
+        
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Explicación del gráfico ABC/XYZ
+        st.info("""
+        **📊 ¿Qué muestra este gráfico?**
+        
+        Esta matriz clasifica productos según dos criterios:
+        
+        **Clasificación ABC (eje Y) - Por valor de ventas:**
+        - **A**: Productos de alto valor (80% de las ventas)
+        - **B**: Productos de valor medio (15% de las ventas) 
+        - **C**: Productos de bajo valor (5% de las ventas)
+        
+        **Clasificación XYZ (eje X) - Por variabilidad de demanda:**
+        - **X**: Demanda muy predecible (baja variación)
+        - **Y**: Demanda moderadamente predecible
+        - **Z**: Demanda impredecible (alta variación)
+        
+        **💡 Estrategias por cuadrante:**
+        - **AX**: Productos estrella - Automatizar reposición
+        - **AZ**: Productos críticos - Aumentar stock de seguridad
+        - **CZ**: Productos problemáticos - Considerar descontinuar
+        """)
+    
+    # FIXED: Corrected Rotation distribution
+    st.subheader("Distribución de Rotación - CORREGIDA")
+    
+    # FIXED: Filter rotation data to show meaningful distribution
+    # Remove zero rotation and extreme values for better visualization
+    df_filtered_rotation = df[(df['rotacion'] > 0) & (df['rotacion'] <= 1000)].copy()
+    
+    if len(df_filtered_rotation) > 0:
+        fig = px.histogram(
+            df_filtered_rotation, 
+            x='rotacion',
+            nbins=20,
+            title="Distribución de Rotación de Inventario (Filtrada: 0 < Rotación ≤ 1000)",
+            labels={'rotacion': 'Rotación', 'count': 'Número de Productos'}
+        )
+        
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show filtering statistics
+        total_products = len(df)
+        filtered_products = len(df_filtered_rotation)
+        zero_rotation = len(df[df['rotacion'] == 0])
+        extreme_rotation = len(df[df['rotacion'] > 1000])
+        
+        st.success(f"""
+        **✅ CORRECCIÓN APLICADA - Estadísticas del Filtro:**
+        - **Total productos**: {total_products:,}
+        - **Productos mostrados** (0 < rotación ≤ 1000): {filtered_products:,} ({filtered_products/total_products*100:.1f}%)
+        - **Productos con rotación = 0**: {zero_rotation:,} ({zero_rotation/total_products*100:.1f}%)
+        - **Productos con rotación > 1000**: {extreme_rotation:,} ({extreme_rotation/total_products*100:.1f}%)
+        
+        *Nota: Se excluyen productos con rotación = 0 (sin movimiento) y rotación extrema (>1000) para mejor visualización*
+        """)
+    else:
+        st.warning("⚠️ No hay productos con rotación en el rango 0-1000 para mostrar en el histograma.")
+        
+        # Show why no products are available
+        zero_count = len(df[df['rotacion'] == 0])
+        extreme_count = len(df[df['rotacion'] > 1000])
+        st.write(f"- Productos con rotación = 0: {zero_count}")
+        st.write(f"- Productos con rotación > 1000: {extreme_count}")
+    
+    # Explicación del gráfico de Distribución de Rotación
+    st.info("""
+    **📊 ¿Qué muestra este gráfico filtrado?**
+    
+    Este histograma muestra la **distribución de la rotación de inventario** de productos con movimiento activo (excluye rotación = 0 y valores extremos):
+    
+    **🔄 Interpretación de la Rotación:**
+    - **Rotación alta (>20)**: Productos que se venden muy rápidamente - Excelente liquidez
+    - **Rotación media (5-20)**: Productos con movimiento activo - Gestión estándar
+    - **Rotación baja (1-5)**: Productos de movimiento lento pero activo - Revisar estrategia
+    
+    **💡 Lo ideal es:**
+    - Una distribución con **concentración en el rango 4-12** (rotación saludable para farmacia)
+    - **Pocos productos en extremos** (muy baja o muy alta rotación)
+    - **Forma de campana** centrada en valores razonables
+    
+    **📈 Una farmacia saludable** debería tener la mayoría de productos con rotación entre 4-12 veces por año.
+    
+    **🚫 Productos excluidos del gráfico:**
+    - **Rotación = 0**: Productos sin ventas o stock agotado
+    - **Rotación > 1000**: Valores extremos por divisiones cercanas a cero
+    """)
+
+def export_to_excel(df):
+    """Export data to Excel"""
+    try:
+        # Create Excel file in memory
+        from io import BytesIO
+        output = BytesIO()
+        
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Resumen_Productos', index=False)
+        
+        # Download button
+        st.download_button(
+            label="📥 Descargar Excel",
+            data=output.getvalue(),
+            file_name=f"analisis_inventario_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+    except Exception as e:
+        st.error(f"Error exportando a Excel: {e}")
 
 def generate_test_data():
     """Generate test data with deterministic values"""

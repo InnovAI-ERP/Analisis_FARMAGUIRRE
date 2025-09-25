@@ -821,35 +821,67 @@ def show_visualizations(df):
     # Rotation distribution
     st.subheader("Distribución de Rotación")
     
-    fig = px.histogram(
-        df, 
-        x='rotacion',
-        nbins=20,
-        title="Distribución de Rotación de Inventario",
-        labels={'rotacion': 'Rotación', 'count': 'Número de Productos'}
-    )
+    # FIXED: Filter rotation data to show meaningful distribution
+    # Remove zero rotation and extreme values for better visualization
+    df_filtered_rotation = df[(df['rotacion'] > 0) & (df['rotacion'] <= 1000)].copy()
     
-    fig.update_layout(height=400)
-    st.plotly_chart(fig, use_container_width=True)
+    if len(df_filtered_rotation) > 0:
+        fig = px.histogram(
+            df_filtered_rotation, 
+            x='rotacion',
+            nbins=20,
+            title="Distribución de Rotación de Inventario (Filtrada: 0 < Rotación ≤ 1000)",
+            labels={'rotacion': 'Rotación', 'count': 'Número de Productos'}
+        )
+        
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Show filtering statistics
+        total_products = len(df)
+        filtered_products = len(df_filtered_rotation)
+        zero_rotation = len(df[df['rotacion'] == 0])
+        extreme_rotation = len(df[df['rotacion'] > 1000])
+        
+        st.info(f"""
+        **📊 Estadísticas del Filtro:**
+        - **Total productos**: {total_products:,}
+        - **Productos mostrados** (0 < rotación ≤ 1000): {filtered_products:,} ({filtered_products/total_products*100:.1f}%)
+        - **Productos con rotación = 0**: {zero_rotation:,} ({zero_rotation/total_products*100:.1f}%)
+        - **Productos con rotación > 1000**: {extreme_rotation:,} ({extreme_rotation/total_products*100:.1f}%)
+        
+        *Nota: Se excluyen productos con rotación = 0 (sin movimiento) y rotación extrema (>1000) para mejor visualización*
+        """)
+    else:
+        st.warning("⚠️ No hay productos con rotación en el rango 0-1000 para mostrar en el histograma.")
+        
+        # Show why no products are available
+        zero_count = len(df[df['rotacion'] == 0])
+        extreme_count = len(df[df['rotacion'] > 1000])
+        st.write(f"- Productos con rotación = 0: {zero_count}")
+        st.write(f"- Productos con rotación > 1000: {extreme_count}")
     
     # Explicación del gráfico de Distribución de Rotación
     st.info("""
-    **📊 ¿Qué muestra este gráfico?**
+    **📊 ¿Qué muestra este gráfico filtrado?**
     
-    Este histograma muestra la **distribución de la rotación de inventario** de todos los productos:
+    Este histograma muestra la **distribución de la rotación de inventario** de productos con movimiento activo (excluye rotación = 0 y valores extremos):
     
     **🔄 Interpretación de la Rotación:**
-    - **Rotación alta (>6)**: Productos que se venden rápidamente - Excelente liquidez
-    - **Rotación media (2-6)**: Productos con movimiento normal - Gestión estándar
-    - **Rotación baja (<2)**: Productos de lento movimiento - Revisar estrategia
-    - **Rotación = 0**: Productos sin ventas - Posible inventario muerto
+    - **Rotación alta (>20)**: Productos que se venden muy rápidamente - Excelente liquidez
+    - **Rotación media (5-20)**: Productos con movimiento activo - Gestión estándar
+    - **Rotación baja (1-5)**: Productos de movimiento lento pero activo - Revisar estrategia
     
     **💡 Lo ideal es:**
-    - Una distribución con **pico hacia la derecha** (más productos con alta rotación)
-    - **Pocos productos con rotación 0** (minimizar inventario muerto)
-    - **Rotación promedio razonable** para el tipo de negocio (farmacia: 4-12 veces/año)
+    - Una distribución con **concentración en el rango 4-12** (rotación saludable para farmacia)
+    - **Pocos productos en extremos** (muy baja o muy alta rotación)
+    - **Forma de campana** centrada en valores razonables
     
-    **📈 Una farmacia saludable** debería tener la mayoría de productos con rotación entre 4-12.
+    **📈 Una farmacia saludable** debería tener la mayoría de productos con rotación entre 4-12 veces por año.
+    
+    **🚫 Productos excluidos del gráfico:**
+    - **Rotación = 0**: Productos sin ventas o stock agotado
+    - **Rotación > 1000**: Valores extremos por divisiones cercanas a cero
     """)
 
 def export_to_excel(df):
